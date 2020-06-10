@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
@@ -33,6 +34,7 @@ using Newtonsoft.Json.Converters;
 using Newtonsoft.Json;
 using Polly.Extensions.Http;
 using Polly.Timeout;
+using Polly;
 
 namespace Web.Api
 {
@@ -53,15 +55,6 @@ namespace Web.Api
         {
             // Add framework services.
             services.AddCors();
-            /*services.AddMetrics(options =>
-        {
-            options.WithGlobalTags((globalTags, info) =>
-            {
-                globalTags.Add("app", info.EntryAssemblyName);
-                globalTags.Add("env", "stage");
-            });
-        });*/
-            //services.AddMetricsMiddleware(options => options.IgnoredHttpStatusCodes = new[] { 404 });
             //services.AddMvc(options => options.AddMetricsResourceFilter());
             services.AddHttpContextAccessor();
             services.AddAutoMapper();
@@ -71,7 +64,7 @@ namespace Web.Api
                              .AddJsonOptions(options => {
                                 options.SerializerSettings.Converters.Add(new Newtonsoft.Json.Converters.StringEnumConverter());
                                 options.SerializerSettings.NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore;
-                              });
+                              }).AddMetrics();
 
             // Register the Swagger generator, defining 1 or more Swagger documents
             services.AddSwaggerGen(c =>
@@ -79,18 +72,19 @@ namespace Web.Api
                 c.SwaggerDoc("v1", new Info { Title = "AspNetCoreApiStarter", Version = "v1" });
             });
 
-var retryPolicy = HttpPolicyExtensions
-    .HandleTransientHttpError()
-    .Or<TimeoutRejectedException>() // thrown by Polly's TimeoutPolicy if the inner call times out
-    .WaitAndRetryAsync(6, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2,
-                                                                    retryAttempt)));
+            var retryPolicy = HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .OrResult(msg => msg.StatusCode == HttpStatusCode.Forbidden)
+                .Or<TimeoutRejectedException>() // thrown by Polly's TimeoutPolicy if the inner call times out
+                .WaitAndRetryAsync(5, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+
+            var timeoutPolicy = Policy.TimeoutAsync<HttpResponseMessage>(5); 
 
             services.AddHttpClient("GitHub", client =>
             {
                 client.BaseAddress = new Uri("https://api.github.com/");
                 client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
-            })
-            .AddPolicyHandler(retryPolicy);
+            }).AddPolicyHandler(retryPolicy).AddPolicyHandler(timeoutPolicy);
 
             // Now register our services with Autofac container.
             var builder = new ContainerBuilder();
@@ -145,7 +139,6 @@ var retryPolicy = HttpPolicyExtensions
                                      .AllowCredentials());*/
 
             //app.UseAuthentication();
-            //app.UseMetrics();
             app.UseMvc();
         }
     }
