@@ -9,8 +9,6 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using App.Metrics;
-using App.Metrics.AspNetCore;
 
 namespace Web.Api
 {
@@ -28,7 +26,6 @@ namespace Web.Api
 
         public static IWebHostBuilder CreateWebHostBuilder(string[] args) =>
             WebHost.CreateDefaultBuilder(args)
-                .UseMetrics()
                 .UseStartup<Startup>()
                 .UseUrls("http://0.0.0.0:5100");
     }

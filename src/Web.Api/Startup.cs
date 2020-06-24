@@ -21,6 +21,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using NLog;
@@ -35,6 +36,9 @@ using Newtonsoft.Json;
 using Polly.Extensions.Http;
 using Polly.Timeout;
 using Polly;
+using Prometheus;
+using Polly.Contrib.Simmy;
+using Polly.Contrib.Simmy.Outcomes;
 
 namespace Web.Api
 {
@@ -53,6 +57,24 @@ namespace Web.Api
         // This method gets called by the runtime. Use this method to add services to the container.
         public IServiceProvider ConfigureServices(IServiceCollection services)
         {
+            // Geração de uma mensagem simulado erro HTTP do tipo 500
+            // (Internal Server Error)
+            var resultInternalServerError = new HttpResponseMessage(
+                HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent(
+                    "Erro gerado em simulação de caos com Simmy...")
+            };
+
+            // Criação da Chaos Policy com uma probabilidade
+            // de 60% de erro
+            var chaosPolicy = MonkeyPolicy
+                .InjectResultAsync<HttpResponseMessage>(with =>
+                    with.Result(resultInternalServerError)
+                        .InjectionRate(0.6)
+                        .Enabled(true)
+                );
+
             // Add framework services.
             services.AddCors();
             //services.AddMvc(options => options.AddMetricsResourceFilter());
@@ -64,7 +86,7 @@ namespace Web.Api
                              .AddJsonOptions(options => {
                                 options.SerializerSettings.Converters.Add(new Newtonsoft.Json.Converters.StringEnumConverter());
                                 options.SerializerSettings.NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore;
-                              }).AddMetrics();
+                              });
 
             // Register the Swagger generator, defining 1 or more Swagger documents
             services.AddSwaggerGen(c =>
@@ -72,19 +94,30 @@ namespace Web.Api
                 c.SwaggerDoc("v1", new Info { Title = "AspNetCoreApiStarter", Version = "v1" });
             });
 
-            var retryPolicy = HttpPolicyExtensions
+            /*var retryPolicy = HttpPolicyExtensions
                 .HandleTransientHttpError()
                 .OrResult(msg => msg.StatusCode == HttpStatusCode.Forbidden)
                 .Or<TimeoutRejectedException>() // thrown by Polly's TimeoutPolicy if the inner call times out
-                .WaitAndRetryAsync(5, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+                .WaitAndRetryAsync(5, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));*/
+            var retryPolicy = Policy
+                .HandleResult<HttpResponseMessage>(r => !r.IsSuccessStatusCode)
+                .RetryAsync(3, onRetry: (message, retryCount) =>
+                {
+                    //Console.Out.WriteLine($"Content: {message.Result.Content.ReadAsStringAsync().Result}");
+                    //Console.Out.WriteLine($"ReasonPhrase: {message.Result.ReasonPhrase}");
+                    //string msg = $"Retentativa: {retryCount}";
+                    //Console.Out.WriteLineAsync(msg);
+                });
 
             var timeoutPolicy = Policy.TimeoutAsync<HttpResponseMessage>(5); 
+
+            var policyWrap = Policy.WrapAsync(retryPolicy, chaosPolicy);
 
             services.AddHttpClient("GitHub", client =>
             {
                 client.BaseAddress = new Uri("https://api.github.com/");
                 client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
-            }).AddPolicyHandler(retryPolicy).AddPolicyHandler(timeoutPolicy);
+            }).AddPolicyHandler(policyWrap).AddPolicyHandler(timeoutPolicy);
 
             // Now register our services with Autofac container.
             var builder = new ContainerBuilder();
@@ -102,8 +135,9 @@ namespace Web.Api
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
-        public void Configure(IApplicationBuilder app, IHostingEnvironment env)
+        public void Configure(IApplicationBuilder app, IHostingEnvironment env, ILoggerFactory loggerFactory)
         {
+            app.UseProblemDetailsExceptionHandler(loggerFactory);
             /*app.UseExceptionHandler(
                 builder =>
                 {
@@ -139,6 +173,17 @@ namespace Web.Api
                                      .AllowCredentials());*/
 
             //app.UseAuthentication();
+            // Custom Metrics to count requests for each endpoint and the method
+var counter = Metrics.CreateCounter("api_path_counter", "Counts requests to the API endpoints", new CounterConfiguration
+{
+LabelNames = new[] { "method", "endpoint" }
+});
+app.Use((context, next) =>
+{
+counter.WithLabels(context.Request.Method, context.Request.Path).Inc();
+return next();
+});
+            app.UseMetricServer();
             app.UseMvc();
         }
     }
