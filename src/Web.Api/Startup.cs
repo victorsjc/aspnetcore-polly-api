@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
@@ -24,9 +25,15 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
-using NLog;
+using Serilog;
+using Serilog.Configuration;
+using Serilog.Core;
+using Serilog.Events;
+using Serilog.Formatting.Compact;
+using Serilog.Sinks.Splunk;
 using Swashbuckle.AspNetCore.Swagger;
 using Web.Api.Core;
+using Web.Api.Logging;
 using Web.Api.Extensions;
 using Web.Api.Infrastructure;
 using Web.Api.Infrastructure.Helpers;
@@ -47,9 +54,20 @@ namespace Web.Api
         public Startup(IConfiguration configuration)
         {
             // Don't try and load nlog config during integ tests.
-            var nLogConfigPath = string.Concat(Directory.GetCurrentDirectory(), "/nlog.config");
-            if (File.Exists(nLogConfigPath)) { LogManager.LoadConfiguration(string.Concat(Directory.GetCurrentDirectory(), "/nlog.config"));}
+            //var nLogConfigPath = string.Concat(Directory.GetCurrentDirectory(), "/nlog.config");
+            //if (File.Exists(nLogConfigPath)) { LogManager.LoadConfiguration(string.Concat(Directory.GetCurrentDirectory(), "/nlog.config"));}
             Configuration = configuration;
+
+            //Log.Logger = new LoggerConfiguration().ReadFrom.Configuration(configuration).CreateLogger();
+
+             Log.Logger = new LoggerConfiguration()
+                     .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+                     .WriteTo.Console()
+                     .WriteTo.EventCollector("http://192.168.99.100:8088/services/collector", "364100c2-2613-4ab0-820f-532721356623",
+                    new CompactSplunkJsonFormatter(),
+        //OPTIONALS (defaults shown)
+        restrictedToMinimumLevel: LevelAlias.Minimum).CreateLogger();
+
         }
 
         public IConfiguration Configuration { get; }
@@ -71,7 +89,7 @@ namespace Web.Api
             var chaosPolicy = MonkeyPolicy
                 .InjectResultAsync<HttpResponseMessage>(with =>
                     with.Result(resultInternalServerError)
-                        .InjectionRate(0.6)
+                        .InjectionRate(0.8)
                         .Enabled(true)
                 );
 
@@ -80,6 +98,7 @@ namespace Web.Api
             //services.AddMvc(options => options.AddMetricsResourceFilter());
             services.AddHttpContextAccessor();
             services.AddAutoMapper();
+            services.AddLogging(loggingBuilder => loggingBuilder.AddSerilog(dispose: true));
 
             services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_2_1)
                              .AddFluentValidation(fv => fv.RegisterValidatorsFromAssemblyContaining<Startup>())
@@ -115,8 +134,9 @@ namespace Web.Api
 
             services.AddHttpClient("GitHub", client =>
             {
-                client.BaseAddress = new Uri("https://api.github.com/");
-                client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
+                client.BaseAddress = new Uri("http://192.168.99.100:5200/api/");
+                client.DefaultRequestHeaders.Accept.Clear();
+                client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             }).AddPolicyHandler(policyWrap).AddPolicyHandler(timeoutPolicy);
 
             // Now register our services with Autofac container.
@@ -138,6 +158,7 @@ namespace Web.Api
         public void Configure(IApplicationBuilder app, IHostingEnvironment env, ILoggerFactory loggerFactory)
         {
             app.UseProblemDetailsExceptionHandler(loggerFactory);
+            //app.UseRequestResponseLogging();
             /*app.UseExceptionHandler(
                 builder =>
                 {
@@ -183,6 +204,7 @@ app.Use((context, next) =>
 counter.WithLabels(context.Request.Method, context.Request.Path).Inc();
 return next();
 });
+            app.UseSerilogRequestLogging();
             app.UseMetricServer();
             app.UseMvc();
         }

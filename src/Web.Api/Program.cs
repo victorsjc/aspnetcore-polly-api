@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Serilog;
 
 namespace Web.Api
 {
@@ -18,7 +19,6 @@ namespace Web.Api
         {
             Task.Run(async () =>
             {
-
               var host = CreateWebHostBuilder(args).Build();
               host.Run();
             }).GetAwaiter().GetResult();
@@ -27,6 +27,7 @@ namespace Web.Api
         public static IWebHostBuilder CreateWebHostBuilder(string[] args) =>
             WebHost.CreateDefaultBuilder(args)
                 .UseStartup<Startup>()
+                .UseSerilog()
                 .UseUrls("http://0.0.0.0:5100");
     }
 }
